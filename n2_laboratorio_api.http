@@ -1,0 +1,6 @@
+@n2_laboratorio_api_HostAddress = http://localhost:5150
+
+GET {{n2_laboratorio_api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
