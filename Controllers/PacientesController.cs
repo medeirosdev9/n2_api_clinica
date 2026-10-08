@@ -2,9 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using n2_laboratorio_api.Data;
 using n2_laboratorio_api.DTOs;
+using n2_laboratorio_api.Helpers;
 using n2_laboratorio_api.Mappers;
-using n2_laboratorio_api.Models;
-using System.Text.RegularExpressions;
 
 namespace n2_laboratorio_api.Controllers;
 
@@ -38,15 +37,16 @@ public class PacientesController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<PacienteReadDTO>> PostPaciente(PacienteCreateDTO dto)
     {
-        var erro = ValidarCampos(dto.Email, dto.Telefone, dto.DataNasc, dto.Cpf);
-        if (erro != null) return BadRequest(erro);
-
-        var cpfLimpo = ApenasNumeros(dto.Cpf);
-        if (await _context.Pacientes.AnyAsync(p => p.Cpf == cpfLimpo))
-            return BadRequest("Já existe um paciente cadastrado com este CPF.");
+        if (!Validacoes.Email(dto.Email)) return BadRequest(Validacoes.ErroEmail);
+        if (!Validacoes.Telefone(dto.Telefone)) return BadRequest(Validacoes.ErroTelefone);
+        if (dto.DataNasc > DateTime.Now) return BadRequest("Data de nascimento não pode ser no futuro.");
+        if (!Validacoes.Cpf(dto.Cpf)) return BadRequest("CPF inválido.");
 
         var paciente = PacienteMapper.ToEntity(dto);
-        paciente.Cpf = cpfLimpo;
+        paciente.Cpf = Validacoes.ApenasNumeros(dto.Cpf);
+
+        if (await _context.Pacientes.AnyAsync(p => p.Cpf == paciente.Cpf))
+            return BadRequest("Já existe um paciente cadastrado com este CPF.");
 
         _context.Pacientes.Add(paciente);
         await _context.SaveChangesAsync();
@@ -55,24 +55,21 @@ public class PacientesController : ControllerBase
     }
 
     [HttpPatch("{id}")]
-    public async Task<IActionResult> PatchPaciente(int id, PacienteUpdateDTO dto)
+    public async Task<ActionResult<PacienteReadDTO>> PatchPaciente(int id, PacienteUpdateDTO dto)
     {
         var paciente = await _context.Pacientes.FindAsync(id);
         if (paciente == null) return NotFound("Paciente não encontrado.");
 
-        if (dto.Email != null && !ValidarEmail(dto.Email))
-            return BadRequest("E-mail em formato inválido.");
+        if (dto.Cpf != null) return BadRequest("O CPF não pode ser alterado.");
+        if (dto.Nome != null && string.IsNullOrWhiteSpace(dto.Nome)) return BadRequest("Nome não pode ser vazio.");
+        if (dto.Email != null && !Validacoes.Email(dto.Email)) return BadRequest(Validacoes.ErroEmail);
+        if (dto.Telefone != null && !Validacoes.Telefone(dto.Telefone)) return BadRequest(Validacoes.ErroTelefone);
+        if (dto.DataNasc > DateTime.Now) return BadRequest("Data de nascimento não pode ser no futuro.");
 
-        if (dto.Telefone != null && !ValidarTelefone(dto.Telefone))
-            return BadRequest("Telefone deve estar no formato (47) 98888-7777.");
-
-        if (dto.DataNasc.HasValue && dto.DataNasc.Value > DateTime.Now)
-            return BadRequest("Data de nascimento não pode ser no futuro.");
-
-        if (dto.Nome != null) paciente.Nome = dto.Nome;
-        if (dto.Email != null) paciente.Email = dto.Email;
-        if (dto.Telefone != null) paciente.Telefone = dto.Telefone;
-        if (dto.DataNasc.HasValue) paciente.DataNasc = dto.DataNasc.Value;
+        paciente.Nome = dto.Nome ?? paciente.Nome;
+        paciente.Email = dto.Email ?? paciente.Email;
+        paciente.Telefone = dto.Telefone ?? paciente.Telefone;
+        paciente.DataNasc = dto.DataNasc ?? paciente.DataNasc;
 
         await _context.SaveChangesAsync();
         return Ok(PacienteMapper.ToReadDTO(paciente));
@@ -87,70 +84,14 @@ public class PacientesController : ControllerBase
 
         if (paciente == null) return NotFound("Paciente não encontrado.");
 
-        var temConsultaFutura = paciente.Consultas.Any(c => c.DataHora > DateTime.Now);
-        if (temConsultaFutura)
+        if (paciente.Consultas.Any(c => c.DataHora > DateTime.Now))
             return BadRequest("Não é possível remover paciente com consultas futuras agendadas.");
 
+        // Remove o histórico de consultas passadas junto com o paciente
+        _context.Consultas.RemoveRange(paciente.Consultas);
         _context.Pacientes.Remove(paciente);
         await _context.SaveChangesAsync();
 
         return NoContent();
-    }
-
-    // --- Métodos Auxiliares de Validação ---
-
-    private static string? ValidarCampos(string email, string telefone, DateTime dataNasc, string cpf)
-    {
-        if (!ValidarEmail(email)) return "E-mail em formato inválido.";
-        if (!ValidarTelefone(telefone)) return "Telefone deve estar no formato (47) 98888-7777.";
-        if (dataNasc > DateTime.Now) return "Data de nascimento não pode ser no futuro.";
-        if (!ValidarCPF(cpf)) return "CPF numérico inválido.";
-        return null;
-    }
-
-    private static bool ValidarEmail(string email)
-    {
-        return Regex.IsMatch(email, @"^[^@\s]+@[^@\s]+\.[^@\s]+$");
-    }
-
-    private static bool ValidarTelefone(string telefone)
-    {
-        return Regex.IsMatch(telefone, @"^\(\d{2}\)\s\d{5}-\d{4}$");
-    }
-
-    private static string ApenasNumeros(string str)
-    {
-        return Regex.Replace(str, @"[^\d]", "");
-    }
-
-    private static bool ValidarCPF(string cpf)
-    {
-        cpf = ApenasNumeros(cpf);
-        if (cpf.Length != 11 || new string(cpf[0], 11) == cpf) return false;
-
-        int[] multiplicador1 = { 10, 9, 8, 7, 6, 5, 4, 3, 2 };
-        int[] multiplicador2 = { 11, 10, 9, 8, 7, 6, 5, 4, 3, 2 };
-
-        string tempCpf = cpf.Substring(0, 9);
-        int soma = 0;
-
-        for (int i = 0; i < 9; i++)
-            soma += int.Parse(tempCpf[i].ToString()) * multiplicador1[i];
-
-        int resto = soma % 11;
-        resto = resto < 2 ? 0 : 11 - resto;
-
-        string digito = resto.ToString();
-        tempCpf += digito;
-        soma = 0;
-
-        for (int i = 0; i < 10; i++)
-            soma += int.Parse(tempCpf[i].ToString()) * multiplicador2[i];
-
-        resto = soma % 11;
-        resto = resto < 2 ? 0 : 11 - resto;
-        digito += resto.ToString();
-
-        return cpf.EndsWith(digito);
     }
 }

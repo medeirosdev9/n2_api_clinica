@@ -8,23 +8,21 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 builder.Services.AddControllers();
-
-// Suporte ao OpenAPI / Swagger
-builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Configuração do pipeline de requisições HTTP
+// Cria/atualiza o banco automaticamente ao iniciar
+using (var scope = app.Services.CreateScope())
+{
+    scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.Migrate();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
-app.UseAuthorization();
-
-// Mapeia as rotas dos Controllers
 app.MapControllers();
 
 app.Run();

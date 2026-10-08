@@ -25,7 +25,7 @@ public static class PacienteMapper
             Nome = dto.Nome,
             Email = dto.Email,
             Telefone = dto.Telefone,
-            DataNasc = dto.DataNasc,
+            DataNasc = dto.DataNasc!.Value,
             Cpf = dto.Cpf
         };
     }

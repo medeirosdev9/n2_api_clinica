@@ -11,6 +11,8 @@ namespace n2_laboratorio_api.Controllers;
 [Route("api/[controller]")]
 public class ConsultasController : ControllerBase
 {
+    private const int DuracaoMinutos = 30;
+
     private readonly AppDbContext _context;
 
     public ConsultasController(AppDbContext context)
@@ -24,6 +26,7 @@ public class ConsultasController : ControllerBase
         var consultas = await _context.Consultas
             .Include(c => c.Paciente)
             .Include(c => c.Medico)
+            .OrderBy(c => c.DataHora)
             .ToListAsync();
 
         return Ok(consultas.Select(ConsultaMapper.ToReadDTO));
@@ -45,78 +48,33 @@ public class ConsultasController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<ConsultaReadDTO>> PostConsulta(ConsultaCreateDTO dto)
     {
-        // 1. Validar se o Paciente existe
-        if (!await _context.Pacientes.AnyAsync(p => p.Id == dto.PacienteId))
-            return BadRequest("Paciente não encontrado.");
-
-        // 2. Validar se o Médico existe
-        if (!await _context.Medicos.AnyAsync(m => m.Id == dto.MedicoId))
-            return BadRequest("Médico não encontrado.");
-
-        // 3. Validar se a data/hora é no futuro
-        if (dto.DataHora < DateTime.Now)
-            return BadRequest("Não é possível agendar consultas no passado.");
-
-        // 4. Validar sobreposição para o Médico
-        if (await TemSobreposicaoMedicoAsync(dto.MedicoId, dto.DataHora))
-            return BadRequest("O médico já possui uma consulta agendada que conflita com este horário.");
-
-        // 5. Validar sobreposição para o Paciente
-        if (await TemSobreposicaoPacienteAsync(dto.PacienteId, dto.DataHora))
-            return BadRequest("O paciente já possui uma consulta agendada que conflita com este horário.");
-
         var consulta = ConsultaMapper.ToEntity(dto);
+
+        var erro = await ValidarAsync(consulta);
+        if (erro != null) return BadRequest(erro);
 
         _context.Consultas.Add(consulta);
         await _context.SaveChangesAsync();
-
-        // Recarrega as navegações para incluir no DTO de resposta
-        await _context.Entry(consulta).Reference(c => c.Paciente).LoadAsync();
-        await _context.Entry(consulta).Reference(c => c.Medico).LoadAsync();
+        await CarregarNavegacoesAsync(consulta);
 
         return CreatedAtAction(nameof(GetConsulta), new { id = consulta.Id }, ConsultaMapper.ToReadDTO(consulta));
     }
 
     [HttpPatch("{id}")]
-    public async Task<IActionResult> PatchConsulta(int id, ConsultaUpdateDTO dto)
+    public async Task<ActionResult<ConsultaReadDTO>> PatchConsulta(int id, ConsultaUpdateDTO dto)
     {
         var consulta = await _context.Consultas.FindAsync(id);
         if (consulta == null) return NotFound("Consulta não encontrada.");
 
-        int novoPacienteId = dto.PacienteId ?? consulta.PacienteId;
-        int novoMedicoId = dto.MedicoId ?? consulta.MedicoId;
-        DateTime novaDataHora = dto.DataHora ?? consulta.DataHora;
+        consulta.PacienteId = dto.PacienteId ?? consulta.PacienteId;
+        consulta.MedicoId = dto.MedicoId ?? consulta.MedicoId;
+        consulta.DataHora = dto.DataHora ?? consulta.DataHora;
 
-        // Validar se o Paciente existe (se foi alterado)
-        if (dto.PacienteId.HasValue && !await _context.Pacientes.AnyAsync(p => p.Id == novoPacienteId))
-            return BadRequest("Paciente não encontrado.");
-
-        // Validar se o Médico existe (se foi alterado)
-        if (dto.MedicoId.HasValue && !await _context.Medicos.AnyAsync(m => m.Id == novoMedicoId))
-            return BadRequest("Médico não encontrado.");
-
-        // Validar se a nova data/hora é no futuro
-        if (novaDataHora < DateTime.Now)
-            return BadRequest("Não é possível agendar consultas no passado.");
-
-        // Validar sobreposição para o Médico (ignorando a própria consulta atual)
-        if (await TemSobreposicaoMedicoAsync(novoMedicoId, novaDataHora, consulta.Id))
-            return BadRequest("O médico já possui uma consulta agendada que conflita com este horário.");
-
-        // Validar sobreposição para o Paciente (ignorando a própria consulta atual)
-        if (await TemSobreposicaoPacienteAsync(novoPacienteId, novaDataHora, consulta.Id))
-            return BadRequest("O paciente já possui uma consulta agendada que conflita com este horário.");
-
-        // Atualizar os campos
-        consulta.PacienteId = novoPacienteId;
-        consulta.MedicoId = novoMedicoId;
-        consulta.DataHora = novaDataHora;
+        var erro = await ValidarAsync(consulta);
+        if (erro != null) return BadRequest(erro);
 
         await _context.SaveChangesAsync();
-
-        // Recarrega as navegações para o DTO de retorno
-        await _context.Entry(consulta).Reference(c => c.Paciente).LoadAsync();
-        await _context.Entry(consulta).Reference(c => c.Medico).LoadAsync();
+        await CarregarNavegacoesAsync(consulta);
 
         return Ok(ConsultaMapper.ToReadDTO(consulta));
     }
@@ -133,27 +91,37 @@ public class ConsultasController : ControllerBase
         return NoContent();
     }
 
-    // --- Métodos Auxiliares para Validação de Sobreposição (Duração de 30 minutos) ---
+    // --- Métodos Auxiliares ---
 
-    private async Task<bool> TemSobreposicaoMedicoAsync(int medicoId, DateTime inicioNova, int? consultaIdIgnorar = null)
+    private async Task<string?> ValidarAsync(Consulta consulta)
     {
-        DateTime fimNova = inicioNova.AddMinutes(30);
+        if (!await _context.Pacientes.AnyAsync(p => p.Id == consulta.PacienteId))
+            return "Paciente não encontrado.";
 
-        return await _context.Consultas.AnyAsync(c =>
-            (consultaIdIgnorar == null || c.Id != consultaIdIgnorar) &&
-            c.MedicoId == medicoId &&
-            c.DataHora < fimNova &&
-            c.DataHora.AddMinutes(30) > inicioNova);
+        if (!await _context.Medicos.AnyAsync(m => m.Id == consulta.MedicoId))
+            return "Médico não encontrado.";
+
+        if (consulta.DataHora < DateTime.Now)
+            return "Não é possível agendar consultas no passado.";
+
+        // Duas consultas de 30 min se sobrepõem se a distância entre os inícios for menor que 30 min
+        var inicio = consulta.DataHora.AddMinutes(-DuracaoMinutos);
+        var fim = consulta.DataHora.AddMinutes(DuracaoMinutos);
+        var conflitos = _context.Consultas
+            .Where(c => c.Id != consulta.Id && c.DataHora > inicio && c.DataHora < fim);
+
+        if (await conflitos.AnyAsync(c => c.MedicoId == consulta.MedicoId))
+            return "O médico já possui uma consulta agendada que conflita com este horário.";
+
+        if (await conflitos.AnyAsync(c => c.PacienteId == consulta.PacienteId))
+            return "O paciente já possui uma consulta agendada que conflita com este horário.";
+
+        return null;
     }
 
-    private async Task<bool> TemSobreposicaoPacienteAsync(int pacienteId, DateTime inicioNova, int? consultaIdIgnorar = null)
+    private async Task CarregarNavegacoesAsync(Consulta consulta)
     {
-        DateTime fimNova = inicioNova.AddMinutes(30);
-
-        return await _context.Consultas.AnyAsync(c =>
-            (consultaIdIgnorar == null || c.Id != consultaIdIgnorar) &&
-            c.PacienteId == pacienteId &&
-            c.DataHora < fimNova &&
-            c.DataHora.AddMinutes(30) > inicioNova);
+        await _context.Entry(consulta).Reference(c => c.Paciente).LoadAsync();
+        await _context.Entry(consulta).Reference(c => c.Medico).LoadAsync();
     }
 }

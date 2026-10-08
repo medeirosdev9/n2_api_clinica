@@ -2,9 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using n2_laboratorio_api.Data;
 using n2_laboratorio_api.DTOs;
+using n2_laboratorio_api.Helpers;
 using n2_laboratorio_api.Mappers;
-using n2_laboratorio_api.Models;
-using System.Text.RegularExpressions;
 
 namespace n2_laboratorio_api.Controllers;
 
@@ -38,8 +37,11 @@ public class MedicosController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<MedicoReadDTO>> PostMedico(MedicoCreateDTO dto)
     {
-        var erro = ValidarCampos(dto.Email, dto.Telefone);
-        if (erro != null) return BadRequest(erro);
+        if (!Validacoes.Email(dto.Email)) return BadRequest(Validacoes.ErroEmail);
+        if (!Validacoes.Telefone(dto.Telefone)) return BadRequest(Validacoes.ErroTelefone);
+
+        if (await _context.Medicos.AnyAsync(m => m.CRM == dto.CRM))
+            return BadRequest("Já existe um médico cadastrado com este CRM.");
 
         var medico = MedicoMapper.ToEntity(dto);
 
@@ -50,21 +52,23 @@ public class MedicosController : ControllerBase
     }
 
     [HttpPatch("{id}")]
-    public async Task<IActionResult> PatchMedico(int id, MedicoUpdateDTO dto)
+    public async Task<ActionResult<MedicoReadDTO>> PatchMedico(int id, MedicoUpdateDTO dto)
     {
         var medico = await _context.Medicos.FindAsync(id);
         if (medico == null) return NotFound("Médico não encontrado.");
 
-        if (dto.Email != null && !ValidarEmail(dto.Email))
-            return BadRequest("E-mail em formato inválido.");
+        if (dto.Nome != null && string.IsNullOrWhiteSpace(dto.Nome)) return BadRequest("Nome não pode ser vazio.");
+        if (dto.CRM != null && string.IsNullOrWhiteSpace(dto.CRM)) return BadRequest("CRM não pode ser vazio.");
+        if (dto.Email != null && !Validacoes.Email(dto.Email)) return BadRequest(Validacoes.ErroEmail);
+        if (dto.Telefone != null && !Validacoes.Telefone(dto.Telefone)) return BadRequest(Validacoes.ErroTelefone);
 
-        if (dto.Telefone != null && !ValidarTelefone(dto.Telefone))
-            return BadRequest("Telefone deve estar no formato (47) 98888-7777.");
+        if (dto.CRM != null && await _context.Medicos.AnyAsync(m => m.CRM == dto.CRM && m.Id != id))
+            return BadRequest("Já existe um médico cadastrado com este CRM.");
 
-        if (dto.Nome != null) medico.Nome = dto.Nome;
-        if (dto.Email != null) medico.Email = dto.Email;
-        if (dto.Telefone != null) medico.Telefone = dto.Telefone;
-        if (dto.CRM != null) medico.CRM = dto.CRM;
+        medico.Nome = dto.Nome ?? medico.Nome;
+        medico.Email = dto.Email ?? medico.Email;
+        medico.Telefone = dto.Telefone ?? medico.Telefone;
+        medico.CRM = dto.CRM ?? medico.CRM;
 
         await _context.SaveChangesAsync();
         return Ok(MedicoMapper.ToReadDTO(medico));
@@ -79,32 +83,14 @@ public class MedicosController : ControllerBase
 
         if (medico == null) return NotFound("Médico não encontrado.");
 
-        var temConsultaFutura = medico.Consultas.Any(c => c.DataHora > DateTime.Now);
-        if (temConsultaFutura)
+        if (medico.Consultas.Any(c => c.DataHora > DateTime.Now))
             return BadRequest("Não é possível remover médico com consultas futuras agendadas.");
 
+        // Remove o histórico de consultas passadas junto com o médico
+        _context.Consultas.RemoveRange(medico.Consultas);
         _context.Medicos.Remove(medico);
         await _context.SaveChangesAsync();
 
         return NoContent();
-    }
-
-    // --- Métodos Auxiliares de Validação ---
-
-    private static string? ValidarCampos(string email, string telefone)
-    {
-        if (!ValidarEmail(email)) return "E-mail em formato inválido.";
-        if (!ValidarTelefone(telefone)) return "Telefone deve estar no formato (47) 98888-7777.";
-        return null;
-    }
-
-    private static bool ValidarEmail(string email)
-    {
-        return Regex.IsMatch(email, @"^[^@\s]+@[^@\s]+\.[^@\s]+$");
-    }
-
-    private static bool ValidarTelefone(string telefone)
-    {
-        return Regex.IsMatch(telefone, @"^\(\d{2}\)\s\d{5}-\d{4}$");
     }
 }

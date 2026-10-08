@@ -1,6 +1,76 @@
-@n2_laboratorio_api_HostAddress = http://localhost:5150
+@host = http://localhost:5150
 
-GET {{n2_laboratorio_api_HostAddress}}/weatherforecast/
-Accept: application/json
+### Pacientes
+GET {{host}}/api/pacientes
 
 ###
+POST {{host}}/api/pacientes
+Content-Type: application/json
+
+{
+  "nome": "Maria Silva",
+  "email": "maria@email.com",
+  "telefone": "(47) 98888-7777",
+  "dataNasc": "1990-05-10",
+  "cpf": "529.982.247-25"
+}
+
+###
+PATCH {{host}}/api/pacientes/1
+Content-Type: application/json
+
+{
+  "telefone": "(47) 99999-0000"
+}
+
+###
+DELETE {{host}}/api/pacientes/1
+
+### Médicos
+GET {{host}}/api/medicos
+
+###
+POST {{host}}/api/medicos
+Content-Type: application/json
+
+{
+  "nome": "Dr. João Souza",
+  "email": "joao@clinica.com",
+  "telefone": "(47) 97777-6666",
+  "crm": "12345-SC"
+}
+
+###
+PATCH {{host}}/api/medicos/1
+Content-Type: application/json
+
+{
+  "email": "joao.souza@clinica.com"
+}
+
+###
+DELETE {{host}}/api/medicos/1
+
+### Consultas
+GET {{host}}/api/consultas
+
+###
+POST {{host}}/api/consultas
+Content-Type: application/json
+
+{
+  "pacienteId": 1,
+  "medicoId": 1,
+  "dataHora": "2027-01-15T14:00:00"
+}
+
+###
+PATCH {{host}}/api/consultas/1
+Content-Type: application/json
+
+{
+  "dataHora": "2027-01-15T15:00:00"
+}
+
+###
+DELETE {{host}}/api/consultas/1
